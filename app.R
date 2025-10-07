@@ -1,3 +1,4 @@
+# --- Pakete laden -----------------------------------------------------------------
 library(shiny)
 library(leaflet)
 library(readxl)
@@ -9,14 +10,19 @@ library(rnaturalearth)
 library(rnaturalearthdata)
 library(stringr)
 library(RColorBrewer)
+library(here)
 
+# --- Daten & Einstellungen --------------------------------------------------------
+Bezirk <- sf::st_read(here::here("Daten", "1 Grundlagen - Regierungsbezirke", "admin1_f.shp"),
+                      quiet = TRUE) %>%
+  filter(ADM != 2002) %>%
+  st_transform(4326)
 
-Bezirk    <- sf::st_read(here::here("Daten", "1 Grundlagen - Regierungsbezirke", "admin1_f.shp")) %>% filter(ADM != 2002) %>% sf::st_transform(4326)
 app_header <- readLines(here::here("Daten_App_Name.txt"))[1]
 popup_spalte <- sub('.*:\\s*\\"([^\\"]+)\\".*', '\\1',
                     readLines(here::here("Daten_App_Name.txt"))[2])
 
-# --- Hilfsfunktionen ------------------------------------------------------------
+# --- Hilfsfunktionen --------------------------------------------------------------
 read_data <- function(path){
   if(!file.exists(path)){
     message("Datei nicht gefunden, erstelle leere Tabelle mit Beispielspalten.")
@@ -30,21 +36,28 @@ write_data <- function(df, path){
   writexl::write_xlsx(df, path)
 }
 
-# --- UI -------------------------------------------------------------------------
+# --- UI ---------------------------------------------------------------------------
 ui <- fluidPage(
   titlePanel("Bayern-Karte: Punkte erfassen & bearbeiten"),
   
-  # 🔹 Erste Zeile: Button + Dropdown nebeneinander
+  # 🔹 Erste Zeile: Button + Dropdown + Kartenumschaltung nebeneinander
   fluidRow(
     column(
-      width = 6,
+      width = 4,
       align = "center",
       actionButton("new_point", "➕ Neuen Eintrag setzen", class = "btn-primary")
     ),
     column(
-      width = 6,
+      width = 4,
       align = "center",
-      selectInput("color_by", "Färbung nach Spalte:", choices = NULL, selected = NULL, width = "80%")
+      selectInput("color_by", "Färbung nach Spalte:",
+                  choices = c("Einfarbig" = ""), selected = "",
+                  width = "80%")
+    ),
+    column(
+      width = 4,
+      align = "center",
+      actionButton("toggle_basemap", "🗺️ Kartenansicht wechseln", class = "btn-secondary")
     )
   ),
   
@@ -69,9 +82,7 @@ ui <- fluidPage(
   verbatimTextOutput("status")
 )
 
-
-
-# --- SERVER ---------------------------------------------------------------------
+# --- SERVER -----------------------------------------------------------------------
 server <- function(input, output, session){
   
   data_path <- "Daten.xlsx"
@@ -79,11 +90,10 @@ server <- function(input, output, session){
   # Excel einlesen
   initial_df <- read_data(data_path)
   
-  # Spalten-Setup
+  # Spalten sicherstellen
   ensure_meta <- function(df){
     if(!"ID" %in% colnames(df)) df$ID <- character(nrow(df))
     df$ID <- as.character(df$ID)
-    
     if(!"created_at" %in% colnames(df)) df$created_at <- as.character(rep(NA, nrow(df)))
     if(!"lon" %in% colnames(df)) df$lon <- numeric(nrow(df))
     if(!"lat" %in% colnames(df)) df$lat <- numeric(nrow(df))
@@ -102,19 +112,30 @@ server <- function(input, output, session){
   initial_df <- ensure_meta(initial_df)
   df <- reactiveVal(initial_df)
   
-  # Regierungsbezirke laden
-  bezirke_sf <- reactive({
-    sf::st_read(here::here("Daten", "1 Grundlagen - Regierungsbezirke", "admin1_f.shp"), quiet = TRUE) %>%
-      filter(ADM != 2002) %>%
-      st_transform(4326)
+  # Basemap-Steuerung
+  basemap_state <- reactiveVal("osm")  # "osm" oder "sat"
+  
+  observeEvent(input$toggle_basemap, {
+    if(basemap_state() == "osm"){
+      basemap_state("sat")
+      leafletProxy("map") %>%
+        clearTiles() %>%
+        addProviderTiles(providers$Esri.WorldImagery)
+    } else {
+      basemap_state("osm")
+      leafletProxy("map") %>%
+        clearTiles() %>%
+        addProviderTiles(providers$OpenStreetMap)
+    }
   })
   
-  
-  # Dropdown füllen, wenn df geladen
+  # Dropdown füllen
   observe({
     meta_cols <- c("ID","created_at","lon","lat")
     choices <- setdiff(colnames(df()), meta_cols)
-    updateSelectInput(session, "color_by", choices = c("Keine" = "", choices))
+    updateSelectInput(session, "color_by",
+                      choices = c("Einfarbig" = "", choices),
+                      selected = isolate(input$color_by))
   })
   
   # Karte rendern
@@ -123,26 +144,21 @@ server <- function(input, output, session){
       addProviderTiles(providers$OpenStreetMap) %>%
       setView(lng = 11.5, lat = 48.9, zoom = 7) %>%
       addPolygons(
-        data = bezirke_sf(),
-        fillColor = "transparent",   # keine Füllung
-        color = "black",             # Umrissfarbe
-        weight = 2,                  # Liniendicke
-        opacity = 1,
-        labelOptions = labelOptions(
-          direction = "auto",
-          style = list("font-size" = "12px")
-        ))
-    
+        data = Bezirk,
+        fillColor = "transparent",
+        color = "black",
+        weight = 2,
+        opacity = 1
+      )
   })
   
-  # Punkte aktualisieren, abhängig von Farbauswahl
+  # Punkte aktualisieren
   observe({
     cur <- df()
     if(nrow(cur)==0) return()
     color_col <- input$color_by
     
     if(is.null(color_col) || color_col == ""){
-      pal <- colorFactor("blue", domain = NULL)
       colors <- rep("blue", nrow(cur))
     } else {
       vals <- unique(cur[[color_col]])
@@ -226,6 +242,7 @@ server <- function(input, output, session){
   last_selected_id <- reactiveVal(NULL)
   selected_row_df <- reactiveVal(NULL)
   
+  # Klick auf Karte → Tabelle aktualisieren
   observeEvent(input$map_marker_click, {
     sel_id <- input$map_marker_click$id
     last_selected_id(sel_id)
@@ -236,6 +253,7 @@ server <- function(input, output, session){
     }
   })
   
+  # Klick auf Tabelle → Marker hervorheben
   observeEvent(input$all_table_rows_selected, {
     sel <- input$all_table_rows_selected
     if(length(sel)==0) return()
@@ -246,41 +264,26 @@ server <- function(input, output, session){
     output$selected_row_table <- renderDT({ datatable(row, editable=TRUE, rownames=FALSE, options=list(dom='t')) })
   })
   
-  # 🔴 Punkt auf der Karte hervorheben, wenn in Tabelle ausgewählt
+  # 🔴 Hervorhebung des ausgewählten Punkts
   observe({
     sel_id <- last_selected_id()
     cur <- df()
-    
-    leafletProxy("map") %>%
-      clearGroup("highlight")  # alte Hervorhebung löschen
-    
-    if(!is.null(sel_id) && sel_id %in% cur$ID) {
+    leafletProxy("map") %>% clearGroup("highlight")
+    if(!is.null(sel_id) && sel_id %in% cur$ID){
       sel_row <- cur %>% filter(ID == sel_id)
       leafletProxy("map") %>%
-        addCircleMarkers(
-          data = sel_row,
-          lng = ~lon,
-          lat = ~lat,
-          radius = 10,                # etwas größerer Kreis
-          color = "red",              # roter Rand
-          weight = 3,                 # dicke Linie
-          fill = FALSE,               # nur Kreisumrandung
-          opacity = 1,
-          group = "highlight"
-        )
+        addCircleMarkers(data = sel_row,
+                         lng = ~lon, lat = ~lat,
+                         radius = 10,
+                         color = "red",
+                         weight = 3,
+                         fill = FALSE,
+                         opacity = 1,
+                         group = "highlight")
     }
   })
   
-  
-  observeEvent(input$selected_row_table_cell_edit, {
-    info <- input$selected_row_table_cell_edit
-    row <- selected_row_df()
-    if(is.null(row)) return()
-    colname <- colnames(row)[info$col + 1]
-    row[1, colname] <- info$value
-    selected_row_df(row)
-  })
-  
+  # Änderungen speichern
   observeEvent(input$save_selected, {
     edited <- selected_row_df()
     if(is.null(edited)) return()
@@ -293,7 +296,7 @@ server <- function(input, output, session){
       output$status <- renderText(paste0("Eintrag ID=", edited$ID, " gespeichert."))
     }
   })
-  
 }
 
+# --- App starten ------------------------------------------------------------------
 shinyApp(ui, server)
