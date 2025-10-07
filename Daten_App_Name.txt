@@ -1,0 +1,2 @@
+Beispieltext aus "Daten_App_Name.txt"
+Spalte_Popup:	"Spalte_A"
