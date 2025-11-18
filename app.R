@@ -61,11 +61,17 @@ ui <- fluidPage(
   titlePanel(app_header),
   
   fluidRow(
+    column(3,
+           div(style="display:flex; align-items:center;",
+               textInput("search_place", NULL, placeholder="Ort suchen...", width="100%"),
+               actionButton("search_button", "🔍", class="btn-secondary", style="margin-left:5px; height:45px;")
+           )
+    ),
     column(3, uiOutput("archive_ui")),
     column(3, align="center", actionButton("new_point", "➕ Neuen Eintrag setzen", class="btn-primary")),
-    column(3, align="center", selectInput("color_by", "Färbung nach Spalte:", choices=c("Einfarbig"=""), selected="")),
-    column(3, align="center", actionButton("toggle_basemap", "🗺️ Kartenansicht wechseln", class="btn-secondary"))
-  ),
+    column(3, align="center", selectInput("color_by", "Färbung nach Spalte:", choices=c("Einfarbig"=""), selected=""))
+  )
+  ,
   
   fluidRow(
     column(12, align="center",
@@ -87,7 +93,7 @@ ui <- fluidPage(
 server <- function(input, output, session){
   
   df <- reactiveVal(read_data(data_path))
-  
+
   basemap_state <- reactiveVal("osm")
   
   reactive_data <- reactive({
@@ -216,6 +222,21 @@ server <- function(input, output, session){
       shinyjs::enable("new_point")
       shinyjs::enable("save_selected")
       shinyjs::enable("add_info")
+    }
+  })
+  
+  observeEvent(input$search_button, {
+    req(input$search_place)
+    place <- URLencode(input$search_place)
+    url <- paste0("https://nominatim.openstreetmap.org/search?q=", place, "&format=json&limit=1")
+    res <- jsonlite::fromJSON(url)
+    
+    if(length(res$lat) > 0){
+      lat <- as.numeric(res$lat[1])
+      lon <- as.numeric(res$lon[1])
+      leafletProxy("map") |> setView(lng=lon, lat=lat, zoom=14)
+    } else {
+      showNotification("Ort nicht gefunden.", type="warning")
     }
   })
   
