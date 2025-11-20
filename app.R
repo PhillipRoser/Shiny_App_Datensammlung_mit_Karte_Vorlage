@@ -69,6 +69,7 @@ ui <- fluidPage(
     ),
     column(3, uiOutput("archive_ui")),
     column(3, align="center", actionButton("new_point", "➕ Neuen Eintrag setzen", class="btn-primary")),
+    column(3, align="center", actionButton("toggle_basemap", "🗺️ Kartenansicht wechseln", class="btn-secondary")),
     column(3, align="center", selectInput("color_by", "Färbung nach Spalte:", choices=c("Einfarbig"=""), selected=""))
   )
   ,
