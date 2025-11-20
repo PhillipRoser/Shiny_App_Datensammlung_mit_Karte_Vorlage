@@ -71,8 +71,11 @@ ui <- fluidPage(
     column(3, align="center", actionButton("new_point", "➕ Neuen Eintrag setzen", class="btn-primary")),
     column(3, align="center", actionButton("toggle_basemap", "🗺️ Kartenansicht wechseln", class="btn-secondary")),
     column(3, align="center", selectInput("color_by", "Färbung nach Spalte:", choices=c("Einfarbig"=""), selected=""))
-  )
-  ,
+  ),
+  
+  fluidRow(
+    column(3, checkboxInput("show_labels", "Beschriftungen anzeigen", value = FALSE))
+  ),
   
   fluidRow(
     column(12, align="center",
@@ -139,18 +142,37 @@ server <- function(input, output, session){
   
   observe({
     cur <- reactive_data()
-    if(nrow(cur)==0) return()
+    if(nrow(cur) == 0) return()
+    
     color_col <- input$color_by
-    colors <- if(is.null(color_col) || color_col=="") rep("blue", nrow(cur)) else {
+    colors <- if(is.null(color_col) || color_col == "") rep("blue", nrow(cur)) else {
       vals <- unique(cur[[color_col]])
       pal <- colorFactor(RColorBrewer::brewer.pal(min(8,length(vals)),"Set2"), domain=vals)
       pal(cur[[color_col]])
     }
+    
     leafletProxy("map") |>
       clearGroup("points") |>
-      addCircleMarkers(data=cur, lng=~lon, lat=~lat, layerId=~ID,
-                       radius=6, color=colors, fillOpacity=0.8,
-                       label=~cur[[popup_spalte]], group="points")
+      clearGroup("labels") |>
+      addCircleMarkers(
+        data = cur, lng = ~lon, lat = ~lat, layerId = ~ID,
+        radius = 6, color = colors, fillOpacity = 0.8,
+        label = ~cur[[popup_spalte]], group = "points"
+      )
+    
+    if (input$show_labels) {
+      leafletProxy("map") |>
+        addLabelOnlyMarkers(
+          data = cur, lng = ~lon, lat = ~lat,
+          label = if (input$color_by == "") {
+            cur[[popup_spalte]]
+          } else {
+            cur[[input$color_by]]
+          },
+          labelOptions = labelOptions(noHide = TRUE, textsize = "12px"),
+          group = "labels"
+        )
+    }
   })
   
   last_click <- reactiveVal(NULL)
